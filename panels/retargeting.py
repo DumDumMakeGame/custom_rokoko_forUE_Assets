@@ -8,6 +8,37 @@ from ..core.retargeting import get_target_armature, get_source_armature
 from bpy.types import PropertyGroup, UIList
 from bpy.props import StringProperty, BoolProperty
 
+bpy.types.Object.dumdum_selected_source = bpy.props.BoolProperty(name = "dumdum_selected_source", default=False)
+bpy.types.Scene.armature_index = bpy.props.IntProperty(name = "armature_index", default=0)
+
+# UIList to draw valid actions using template_list
+class DDSS_UL_ArmatureUIList(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname):
+        row = layout.row(align = True)
+        row.prop(item, "dumdum_selected_source", text = "")
+        row.prop(item, "name", text="", emboss = False)
+    
+    def filter_items(self, context, data, propname):
+        # Default return values.
+        flt_flags = []
+        flt_neworder = []
+        
+        # Get list of all items
+        items = getattr(data, propname)
+        
+        #Initialize filter flags
+        flt_flags = [self.bitflag_filter_item] * len(items)
+        
+        i = 0
+        
+        # Do not display actions that don't have clear animation data (pose.bones)
+        while i < len(items):
+            displayItem = items[i].type == "ARMATURE"
+            
+            if not displayItem: flt_flags[i] &= ~self.bitflag_filter_item
+            i += 1
+        
+        return flt_flags, flt_neworder
 
 # Retargeting panel
 class RetargetingPanel(ToolPanel, bpy.types.Panel):
@@ -23,8 +54,18 @@ class RetargetingPanel(ToolPanel, bpy.types.Panel):
         row.label(text='Select the armatures:')
 
         row = layout.row(align=True)
-        row.prop(context.scene, 'rsl_retargeting_armature_source', icon='ARMATURE_DATA')
-
+        row.label(text="Source:")
+        #row.prop(context.scene, 'rsl_retargeting_armature_source', icon='ARMATURE_DATA')
+        
+        row = layout.row()
+        row.template_list(listtype_name = "DDSS_UL_ArmatureUIList", 
+                          list_id = "The_List", 
+                          dataptr = bpy.data, 
+                          propname = "objects", 
+                          active_dataptr = bpy.context.scene, 
+                          active_propname = "armature_index",
+                          rows = 3)
+                          
         row = layout.row(align=True)
         row.prop(context.scene, 'rsl_retargeting_armature_target', icon='ARMATURE_DATA')
 
@@ -37,8 +78,13 @@ class RetargetingPanel(ToolPanel, bpy.types.Panel):
             row = layout.row(align=True)
             row.label(text='No animated armature found!', icon='INFO')
             return
+        
+        any_sources_selected = False
+        for obj in bpy.data.objects:
+            if obj.type == "ARMATURE" and obj.dumdum_selected_source:
+                any_sources_selected = True
 
-        if not context.scene.rsl_retargeting_armature_source or not context.scene.rsl_retargeting_armature_target:
+        if not any_sources_selected or not context.scene.rsl_retargeting_armature_target:
             self.draw_import_export(layout)
             return
 
@@ -75,7 +121,7 @@ class RetargetingPanel(ToolPanel, bpy.types.Panel):
 
         row = layout.row(align=True)
         row.scale_y = 1.4
-        row.operator(retargeting.RetargetAnimation.bl_idname, icon_value=Icons.CALIBRATE.get_icon())
+        row.operator(retargeting.RetargetAnimations.bl_idname, icon_value=Icons.CALIBRATE.get_icon())
 
         self.draw_import_export(layout)
 

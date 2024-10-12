@@ -20,17 +20,18 @@ class BuildBoneList(bpy.types.Operator):
     def execute(self, context):
         armature_source = get_source_armature()
         armature_target = get_target_armature()
-
-        if not armature_source.animation_data or not armature_source.animation_data.action:
+        
+        if len(armature_source) <= 0:
             self.report({'ERROR'}, 'No animation on the source armature found!'
                                    '\nSelect an armature with an animation as source.')
             return {'CANCELLED'}
 
-        if armature_source.name == armature_target.name:
-            self.report({'ERROR'}, 'Source and target armature are the same!'
-                                   '\nPlease select different armatures.')
-            return {'CANCELLED'}
-
+        for obj in armature_source:
+            if obj.name == armature_target.name:
+                self.report({'ERROR'}, 'Source and target armature are the same!'
+                                       '\nPlease select different armatures.')
+                return {'CANCELLED'}
+        
         retargeting_dict = detector.detect_retarget_bones()
 
         # Clear the bone retargeting list
@@ -73,190 +74,191 @@ class ClearBoneList(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class RetargetAnimation(bpy.types.Operator):
-    bl_idname = "rsl.retarget_animation"
-    bl_label = "Retarget Animation"
-    bl_description = "Retargets the animation from the source armature to the target armature"
+class RetargetAnimations(bpy.types.Operator):
+    bl_idname = "rsl.retarget_animations"
+    bl_label = "Retarget Animations"
+    bl_description = "Retargets the animations from the source armature to the target armature"
     bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
 
     retarget_bone_list: [BoneListItem] = []
 
     def execute(self, context):
-        armature_source = get_source_armature()
+        armature_sources = get_source_armature()
         armature_target = get_target_armature()
+        
+        for armature_source in armature_sources:
+            if not armature_source.animation_data or not armature_source.animation_data.action:
+                self.report({'ERROR'}, 'No animation on the source armature found!'
+                                       '\nSelect an armature with an animation as source.')
+                return {'CANCELLED'}
 
-        if not armature_source.animation_data or not armature_source.animation_data.action:
-            self.report({'ERROR'}, 'No animation on the source armature found!'
-                                   '\nSelect an armature with an animation as source.')
-            return {'CANCELLED'}
+            if armature_source.name == armature_target.name:
+                self.report({'ERROR'}, 'Source and target armature are the same!'
+                                       '\nPlease select different armatures.')
+                return {'CANCELLED'}
 
-        if armature_source.name == armature_target.name:
-            self.report({'ERROR'}, 'Source and target armature are the same!'
-                                   '\nPlease select different armatures.')
-            return {'CANCELLED'}
+            # Build retargeting bone list
+            self.retarget_bone_list.clear()
+            for item in context.scene.rsl_retargeting_bone_list:
+                if not item.bone_name_source or not item.bone_name_target \
+                        or not armature_source.pose.bones.get(item.bone_name_source) \
+                        or not armature_target.pose.bones.get(item.bone_name_target):
+                    continue
+                self.retarget_bone_list.append(item)
 
-        # Build retargeting bone list
-        self.retarget_bone_list.clear()
-        for item in context.scene.rsl_retargeting_bone_list:
-            if not item.bone_name_source or not item.bone_name_target \
-                    or not armature_source.pose.bones.get(item.bone_name_source) \
-                    or not armature_target.pose.bones.get(item.bone_name_target):
-                continue
-            self.retarget_bone_list.append(item)
+            # Find the root bones and cancel if none are found
+            root_bones = self.find_root_bones(context, armature_source, armature_target)
+            if not root_bones:
+                self.report({'ERROR'}, 'No root bone found!'
+                                       '\nCheck if the bones are mapped correctly or try rebuilding the bone list.')
+                return {'CANCELLED'}
 
-        # Find the root bones and cancel if none are found
-        root_bones = self.find_root_bones(context, armature_source, armature_target)
-        if not root_bones:
-            self.report({'ERROR'}, 'No root bone found!'
-                                   '\nCheck if the bones are mapped correctly or try rebuilding the bone list.')
-            return {'CANCELLED'}
+            # Check for duplicate target bone entries
+            seen = {}
+            for item in self.retarget_bone_list:
+                count = seen.get(item.bone_name_target)
+                if not count:
+                    count = 0
+                seen[item.bone_name_target] = count + 1
+            duplicates = [key for key, value in seen.items() if value > 1]
+            if duplicates:
+                self.report({'ERROR'}, 'Duplicate target bone entries found! Please use each target bone only once:'
+                                       f'\n{", ".join(duplicates)}')
+                return {'CANCELLED'}
 
-        # Check for duplicate target bone entries
-        seen = {}
-        for item in self.retarget_bone_list:
-            count = seen.get(item.bone_name_target)
-            if not count:
-                count = 0
-            seen[item.bone_name_target] = count + 1
-        duplicates = [key for key, value in seen.items() if value > 1]
-        if duplicates:
-            self.report({'ERROR'}, 'Duplicate target bone entries found! Please use each target bone only once:'
-                                   f'\n{", ".join(duplicates)}')
-            return {'CANCELLED'}
+            # Save the bone list if the user changed anything
+            custom_schemes_manager.save_retargeting_to_list()
 
-        # Save the bone list if the user changed anything
-        custom_schemes_manager.save_retargeting_to_list()
+            # Prepare armatures
+            utils.set_active(armature_target)
+            bpy.ops.object.mode_set(mode='OBJECT')
+            utils.set_active(armature_source)
+            bpy.ops.object.mode_set(mode='OBJECT')
 
-        # Prepare armatures
-        utils.set_active(armature_target)
-        bpy.ops.object.mode_set(mode='OBJECT')
-        utils.set_active(armature_source)
-        bpy.ops.object.mode_set(mode='OBJECT')
+            # Set armatures into pose mode
+            armature_source.data.pose_position = 'POSE'
+            armature_target.data.pose_position = 'POSE'
 
-        # Set armatures into pose mode
-        armature_source.data.pose_position = 'POSE'
-        armature_target.data.pose_position = 'POSE'
+            # Save and reset the current pose position of both armatures if rest position should be used
+            pose_source, pose_target = {}, {}
+            if bpy.context.scene.rsl_retargeting_use_pose == 'REST':
+                pose_source = self.get_and_reset_pose_rotations(armature_source)
+                pose_target = self.get_and_reset_pose_rotations(armature_target)
 
-        # Save and reset the current pose position of both armatures if rest position should be used
-        pose_source, pose_target = {}, {}
-        if bpy.context.scene.rsl_retargeting_use_pose == 'REST':
-            pose_source = self.get_and_reset_pose_rotations(armature_source)
-            pose_target = self.get_and_reset_pose_rotations(armature_target)
+            # Auto scaling
+            source_scale = None
+            if context.scene.rsl_retargeting_auto_scaling:
+                # Clean source animation
+                # TODO: This causes issues when all Hip bone data is on the armature itself
+                self.clean_animation(armature_source)
 
-        # Auto scaling
-        source_scale = None
-        if context.scene.rsl_retargeting_auto_scaling:
-            # Clean source animation
-            # TODO: This causes issues when all Hip bone data is on the armature itself
-            self.clean_animation(armature_source)
+                # Scale the source armature to fit the target armature
+                source_scale = copy.deepcopy(armature_source.scale)
+                self.scale_armature(context, armature_source, armature_target, root_bones)
 
-            # Scale the source armature to fit the target armature
-            source_scale = copy.deepcopy(armature_source.scale)
-            self.scale_armature(context, armature_source, armature_target, root_bones)
+            # Duplicate source armature to apply transforms to the animation
+            armature_source_original = armature_source
+            armature_source = self.copy_rest_pose(context, armature_source)
 
-        # Duplicate source armature to apply transforms to the animation
-        armature_source_original = armature_source
-        armature_source = self.copy_rest_pose(context, armature_source)
+            # Save transforms of target armature
+            rotation_mode = armature_target.rotation_mode
+            armature_target.rotation_mode = 'QUATERNION'
+            rotation = copy.deepcopy(armature_target.rotation_quaternion)
+            location = copy.deepcopy(armature_target.location)
 
-        # Save transforms of target armature
-        rotation_mode = armature_target.rotation_mode
-        armature_target.rotation_mode = 'QUATERNION'
-        rotation = copy.deepcopy(armature_target.rotation_quaternion)
-        location = copy.deepcopy(armature_target.location)
+            # Apply transforms of the target armature
+            bpy.ops.object.select_all(action='DESELECT')
+            utils.set_active(armature_target)
+            bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
-        # Apply transforms of the target armature
-        bpy.ops.object.select_all(action='DESELECT')
-        utils.set_active(armature_target)
-        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+            bpy.ops.object.mode_set(mode='EDIT')
 
-        bpy.ops.object.mode_set(mode='EDIT')
+            # Create a transformation dict of all bones of the target armature and unselect all bones
+            bone_transforms = {}
+            for bone in context.object.data.edit_bones:
+                bone.select = False
+                bone_transforms[bone.name] = armature_source.matrix_world.inverted() @ bone.head.copy(), \
+                                             armature_source.matrix_world.inverted() @ bone.tail.copy(), \
+                                             utils.mat3_to_vec_roll(armature_source.matrix_world.inverted().to_3x3() @ bone.matrix.to_3x3())  # Head loc, tail loc, bone roll
 
-        # Create a transformation dict of all bones of the target armature and unselect all bones
-        bone_transforms = {}
-        for bone in context.object.data.edit_bones:
-            bone.select = False
-            bone_transforms[bone.name] = armature_source.matrix_world.inverted() @ bone.head.copy(), \
-                                         armature_source.matrix_world.inverted() @ bone.tail.copy(), \
-                                         utils.mat3_to_vec_roll(armature_source.matrix_world.inverted().to_3x3() @ bone.matrix.to_3x3())  # Head loc, tail loc, bone roll
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.select_all(action='DESELECT')
+            utils.set_active(armature_source)
+            bpy.ops.object.mode_set(mode='EDIT')
 
-        bpy.ops.object.mode_set(mode='OBJECT')
-        bpy.ops.object.select_all(action='DESELECT')
-        utils.set_active(armature_source)
-        bpy.ops.object.mode_set(mode='EDIT')
+            # Recreate bones from target armature in source armature
+            for item in self.retarget_bone_list:
+                bone_source = armature_source.data.edit_bones.get(item.bone_name_source)
 
-        # Recreate bones from target armature in source armature
-        for item in self.retarget_bone_list:
-            bone_source = armature_source.data.edit_bones.get(item.bone_name_source)
+                # Recreate target bone
+                bone_new = armature_source.data.edit_bones.new(item.bone_name_target + RETARGET_ID)
+                bone_new.head, bone_new.tail, bone_new.roll = bone_transforms[item.bone_name_target]
+                bone_new.parent = bone_source
 
-            # Recreate target bone
-            bone_new = armature_source.data.edit_bones.new(item.bone_name_target + RETARGET_ID)
-            bone_new.head, bone_new.tail, bone_new.roll = bone_transforms[item.bone_name_target]
-            bone_new.parent = bone_source
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.ops.object.select_all(action='DESELECT')
 
-        bpy.ops.object.mode_set(mode='OBJECT')
-        bpy.ops.object.select_all(action='DESELECT')
+            # Add constraints to target armature and select the bones for animation
+            for item in self.retarget_bone_list:
+                bone_target = armature_target.pose.bones.get(item.bone_name_target)
 
-        # Add constraints to target armature and select the bones for animation
-        for item in self.retarget_bone_list:
-            bone_target = armature_target.pose.bones.get(item.bone_name_target)
-
-            # Add constraints
-            constraint = bone_target.constraints.new('COPY_ROTATION')
-            constraint.name += RETARGET_ID
-            constraint.target = armature_source
-            constraint.subtarget = item.bone_name_target + RETARGET_ID
-
-            if bone_target.name in root_bones:
-                constraint = bone_target.constraints.new('COPY_LOCATION')
+                # Add constraints
+                constraint = bone_target.constraints.new('COPY_ROTATION')
                 constraint.name += RETARGET_ID
                 constraint.target = armature_source
-                constraint.subtarget = item.bone_name_source
+                constraint.subtarget = item.bone_name_target + RETARGET_ID
 
-            # Select the bone for animation
-            armature_target.data.bones.get(item.bone_name_target).select = True
+                if bone_target.name in root_bones:
+                    constraint = bone_target.constraints.new('COPY_LOCATION')
+                    constraint.name += RETARGET_ID
+                    constraint.target = armature_source
+                    constraint.subtarget = item.bone_name_source
 
-        # Bake the animation to the target armature
-        self.bake_animation(armature_source, armature_target, root_bones)
+                # Select the bone for animation
+                armature_target.data.bones.get(item.bone_name_target).select = True
 
-        # Delete the duplicate helper armature
-        bpy.ops.object.select_all(action='DESELECT')
-        utils.set_active(armature_source)
-        bpy.data.actions.remove(armature_source.animation_data.action)
-        bpy.ops.object.delete()
+            # Bake the animation to the target armature
+            self.bake_animation(armature_source, armature_target, root_bones)
 
-        # Change armature source back to original
-        armature_source = armature_source_original
+            # Delete the duplicate helper armature
+            bpy.ops.object.select_all(action='DESELECT')
+            utils.set_active(armature_source)
+            bpy.data.actions.remove(armature_source.animation_data.action)
+            bpy.ops.object.delete()
 
-        # Change action name
-        armature_target.animation_data.action.name = armature_source.animation_data.action.name + ' Retarget'
+            # Change armature source back to original
+            armature_source = armature_source_original
 
-        # Remove constraints from target armature
-        for bone in armature_target.pose.bones:
-            for constraint in bone.constraints:
-                if RETARGET_ID in constraint.name:
-                    bone.constraints.remove(constraint)
+            # Change action name
+            armature_target.animation_data.action.name = armature_source.animation_data.action.name + ' Retarget'
 
-        bpy.ops.object.select_all(action='DESELECT')
-        utils.set_active(armature_target)
+            # Remove constraints from target armature
+            for bone in armature_target.pose.bones:
+                for constraint in bone.constraints:
+                    if RETARGET_ID in constraint.name:
+                        bone.constraints.remove(constraint)
 
-        # Reset target armature transforms to old state
-        armature_target.rotation_quaternion = rotation
-        armature_target.location = location
+            bpy.ops.object.select_all(action='DESELECT')
+            utils.set_active(armature_target)
 
-        armature_target.rotation_quaternion.w = -armature_target.rotation_quaternion.w
-        bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
-        armature_target.rotation_quaternion = rotation
-        armature_target.rotation_mode = rotation_mode
+            # Reset target armature transforms to old state
+            armature_target.rotation_quaternion = rotation
+            armature_target.location = location
 
-        # Reset source armature scale
-        if source_scale:
-            armature_source.scale = source_scale
+            armature_target.rotation_quaternion.w = -armature_target.rotation_quaternion.w
+            bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
+            armature_target.rotation_quaternion = rotation
+            armature_target.rotation_mode = rotation_mode
 
-        # Reset pose positions to old state
-        # self.load_pose_rotations(armature_source, pose_source)
-        # self.load_pose_rotations(armature_target, pose_target)
+            # Reset source armature scale
+            if source_scale:
+                armature_source.scale = source_scale
 
-        bpy.ops.object.select_all(action='DESELECT')
+            # Reset pose positions to old state
+            # self.load_pose_rotations(armature_source, pose_source)
+            # self.load_pose_rotations(armature_target, pose_target)
+
+            bpy.ops.object.select_all(action='DESELECT')
 
         self.report({'INFO'}, 'Retargeted animation.')
         return {'FINISHED'}

@@ -290,7 +290,7 @@ def detect_retarget_bones() -> {str: (str, str)}:
     """
     bone_list_animated = []
     retargeting_dict = {}
-    armature_source = retargeting.get_source_armature()
+    armature_source = retargeting.get_source_armature()[0]
     armature_target = retargeting.get_target_armature()
 
     # Get all source bones from the animation and add them to bone_list_animated
@@ -301,8 +301,8 @@ def detect_retarget_bones() -> {str: (str, str)}:
 
     # Check if this animation is from Rokoko Studio. Ignore certain bones in that case
     is_rokoko_animation = False
-    if 'newton' in bone_list_animated and 'RightFinger1Tip' in bone_list_animated and 'HeadVertex' in bone_list_animated and 'LeftFinger2Metacarpal' in bone_list_animated:
-        is_rokoko_animation = True
+#    if 'newton' in bone_list_animated and 'RightFinger1Tip' in bone_list_animated and 'HeadVertex' in bone_list_animated and 'LeftFinger2Metacarpal' in bone_list_animated:
+#        is_rokoko_animation = True
 
     spines_source = []
     spines_target = []
@@ -318,6 +318,8 @@ def detect_retarget_bones() -> {str: (str, str)}:
         main_bone_name = ''
         standardized_bone_name_source = standardize_bone_name(bone_name)
 
+        if standardized_bone_name_source not in bone_detection_list:
+            bone_detection_list[standardized_bone_name_source] = []
         # Find the main bone name (bone name key) of the source bone
         for bone_main, bone_values in bone_detection_list.items():
             if bone_main == 'chest':  # Ignore chest bones, these are only used for live data

@@ -73,7 +73,7 @@ def register():
     # Retargeting
     Scene.rsl_retargeting_armature_source = PointerProperty(
         name='Source',
-        description='Select the armature with the animation that you want to retarget',
+        description='Select the armatures with the animation that you want to retarget',
         type=Object,
         poll=retargeting.poll_source_armatures,
         update=retargeting.clear_bone_list
